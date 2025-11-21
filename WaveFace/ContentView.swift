@@ -142,7 +142,7 @@ struct ContentView: View {
 
     // Helper method to create grid content based on current mode
     @ViewBuilder
-    private func gridContent(columns: [GridItem], spacing: CGFloat) -> some View {
+    private func gridContent(columns: [GridItem], spacing: CGFloat, buttonSize: CGFloat) -> some View {
         if appMode == .browse || appMode == .selecting {
             // Browse mode: Show all waveforms
             LazyVGrid(columns: columns, spacing: spacing) {
@@ -152,6 +152,7 @@ struct ContentView: View {
                         isActive: currentWaveform == waveformType,
                         appMode: appMode,
                         arpState: .off,  // Browse mode doesn't use ARPs
+                        buttonSize: buttonSize,
                         onPress: {
                             if appMode == .selecting {
                                 // Complete the selection and switch to play mode
@@ -185,19 +186,20 @@ struct ContentView: View {
         } else {
             // Play mode: Show pitch grid or scale/wave selection
             LazyVGrid(columns: columns, spacing: spacing) {
-                playModeGridContent()
+                playModeGridContent(buttonSize: buttonSize)
             }
         }
     }
 
     @ViewBuilder
-    private func playModeGridContent() -> some View {
+    private func playModeGridContent(buttonSize: CGFloat) -> some View {
         if showingScaleSelection {
             // Show 16 scale options
             ForEach(ScaleType.allCases, id: \.self) { scale in
                 ScaleButton(
                     scale: scale,
                     isActive: selectedScale == scale,
+                    buttonSize: buttonSize,
                     onPress: {
                         selectedScale = scale
                         showingScaleSelection = false
@@ -212,6 +214,7 @@ struct ContentView: View {
                     isActive: selectedWaveformForPitch == waveform,
                     appMode: appMode,
                     arpState: arpStates[waveform]?.mode ?? .off,
+                    buttonSize: buttonSize,
                     onPress: {
                         selectedWaveformForPitch = waveform
                         showingWaveSelection = false
@@ -233,6 +236,7 @@ struct ContentView: View {
                 BpmButton(
                     bpm: bpm,
                     isActive: currentBpm == bpm,
+                    buttonSize: buttonSize,
                     onPress: {
                         currentBpm = bpm
                         showingBpmSelection = false
@@ -258,14 +262,17 @@ struct ContentView: View {
                 )
             }
         } else {
-            // Show 4x4 grid of pitch pads
-            ForEach(0..<16, id: \.self) { index in
+            // Show pitch grid - 4x4 (16 pads) for both iPhone and iPad
+            let isIPad = UIDevice.current.userInterfaceIdiom == .pad
+            let totalPads = 16  // Both iPhone and iPad use 16 pads (4x4 grid)
+            ForEach(0..<totalPads, id: \.self) { index in
                 if let waveform = selectedWaveformForPitch {
                     PitchButton(
                         waveform: waveform,
                         noteIndex: index,
                         isActive: (activePitchNotes[waveform]?.contains(index) ?? false),
                         isDeactivated: currentArpState.wrappedValue.deactivatedSteps.contains(index),
+                        buttonSize: buttonSize,
                         onPress: {
                             if currentArpState.wrappedValue.mode != .off {
                                 // If ARP is active, toggle step activation
@@ -301,14 +308,15 @@ struct ContentView: View {
         }
 
         // Control buttons
-        controlButtons()
+        controlButtons(buttonSize: buttonSize)
     }
 
     @ViewBuilder
-    private func controlButtons() -> some View {
+    private func controlButtons(buttonSize: CGFloat) -> some View {
         // WAVE button (replaces back button) - custom styling
         WaveButton(
             label: "WAVE",
+            buttonSize: buttonSize,
             onPress: {
                 showingWaveSelection.toggle()
                 showingScaleSelection = false  // Close scale selection if open
@@ -319,6 +327,7 @@ struct ContentView: View {
         // SCALE button (always shown)
         ModeButton(
             label: "SCALE",
+            buttonSize: buttonSize,
             onPress: {
                 showingScaleSelection.toggle()
                 showingWaveSelection = false  // Close wave selection if open
@@ -329,6 +338,7 @@ struct ContentView: View {
         // BPM button - shows BPM selection grid
         ModeButton(
             label: "BPM",
+            buttonSize: buttonSize,
             onPress: {
                 showingBpmSelection.toggle()
                 showingScaleSelection = false  // Close scale selection if open
@@ -340,6 +350,7 @@ struct ContentView: View {
         // ROOT button (moved before PLAY position)
         RootButton(
             currentNote: rootNotes[rootNoteIndex],
+            buttonSize: buttonSize,
             onPress: {
                 // Cycle through root notes
                 rootNoteIndex = (rootNoteIndex + 1) % rootNotes.count
@@ -349,6 +360,7 @@ struct ContentView: View {
         // ARP button (renamed to PLAY/ARP based on state)
         ArpButton(
             arpMode: currentArpState.wrappedValue.mode,
+            buttonSize: buttonSize,
             onPress: {
                 if currentArpState.wrappedValue.mode == .off {
                     // Act as PLAY button - start global playing
@@ -365,6 +377,7 @@ struct ContentView: View {
         // STOP button (universal)
         ModeButton(
             label: "STOP",
+            buttonSize: buttonSize,
             onPress: {
                 isGloballyPlaying = false
 
@@ -414,6 +427,7 @@ struct ContentView: View {
         // Down arrow button for octave down
         ModeButton(
             label: "↓",
+            buttonSize: buttonSize,
             onPress: {
                 // Decrease octave offset
                 guard let waveform = selectedWaveformForPitch else { return }
@@ -427,6 +441,7 @@ struct ContentView: View {
         // Up arrow button for octave up
         ModeButton(
             label: "↑",
+            buttonSize: buttonSize,
             onPress: {
                 // Increase octave offset
                 guard let waveform = selectedWaveformForPitch else { return }
@@ -440,11 +455,12 @@ struct ContentView: View {
 
     var body: some View {
         GeometryReader { geometry in
-            let buttonSize: CGFloat = 80
-            let spacing: CGFloat = 4
-            let totalWidth = geometry.size.width - 40 // More padding
-            let columnsCount = Int(totalWidth / (buttonSize + spacing))
-            let columns = Array(repeating: GridItem(.fixed(buttonSize), spacing: spacing), count: max(4, columnsCount))
+            // Use device-specific button sizes to ensure grid fits properly
+            let isIPad = UIDevice.current.userInterfaceIdiom == .pad
+            let buttonSize: CGFloat = isIPad ? 120 : 70  // Much larger buttons for iPad to fill screen space
+            let spacing: CGFloat = isIPad ? 8 : 4  // Increased spacing for iPad
+            let columnCount = 4  // Both iPhone and iPad use 4x4 grid
+            let columns = Array(repeating: GridItem(.fixed(buttonSize), spacing: spacing), count: columnCount)
 
             ZStack {
                 // Background color
@@ -483,7 +499,7 @@ struct ContentView: View {
                     // Button grid BELOW - centered at fixed position
                     HStack(spacing: 0) {
                         Spacer()
-                        gridContent(columns: columns, spacing: spacing)
+                        gridContent(columns: columns, spacing: spacing, buttonSize: buttonSize)
                         Spacer()
                     }
 
@@ -687,6 +703,7 @@ struct WaveformButton: View {
     let isActive: Bool
     var appMode: AppMode = .browse
     let arpState: ArpMode  // Add ARP state to check if this waveform is playing
+    let buttonSize: CGFloat
     let onPress: () -> Void
     let onRelease: () -> Void
 
@@ -818,7 +835,7 @@ struct WaveformButton: View {
             // Background
             Rectangle()
                 .fill(backgroundColor)
-                .frame(width: 80, height: 80)
+                .frame(width: buttonSize, height: buttonSize)
                 .overlay(
                     ZStack {
                         // 3D bevel effect (only when active in browse mode)
@@ -920,6 +937,7 @@ struct PitchButton: View {
     let noteIndex: Int
     let isActive: Bool
     var isDeactivated: Bool = false
+    let buttonSize: CGFloat
     let onPress: () -> Void
     let onRelease: () -> Void
 
@@ -935,7 +953,7 @@ struct PitchButton: View {
                         Color(red: waveform.color.0, green: waveform.color.1, blue: waveform.color.2)
                     )
                 )
-                .frame(width: 80, height: 80)
+                .frame(width: buttonSize, height: buttonSize)
                 .overlay(
                     ZStack {
                         // 3D bevel effect
@@ -1018,6 +1036,7 @@ struct BackButton: View {
 // Wave button with custom styling (black when active)
 struct WaveButton: View {
     let label: String
+    let buttonSize: CGFloat
     let onPress: () -> Void
     var isActive: Bool = false
 
@@ -1025,7 +1044,7 @@ struct WaveButton: View {
         ZStack {
             Rectangle()
                 .fill(isActive ? Color.black : Color.white)
-                .frame(width: 80, height: 80)
+                .frame(width: buttonSize, height: buttonSize)
                 .overlay(
                     Rectangle()
                         .stroke(isActive ? Color.white : Color.gray, lineWidth: 2)
@@ -1046,6 +1065,7 @@ struct WaveButton: View {
 // Mode button for SCALE, ARP, PITCH controls
 struct ModeButton: View {
     let label: String
+    let buttonSize: CGFloat
     let onPress: () -> Void
     var isActive: Bool = false
 
@@ -1053,7 +1073,7 @@ struct ModeButton: View {
         ZStack {
             Rectangle()
                 .fill(isActive ? Color.green : Color.white)
-                .frame(width: 80, height: 80)
+                .frame(width: buttonSize, height: buttonSize)
                 .overlay(
                     Rectangle()
                         .stroke(isActive ? Color.white : Color.gray, lineWidth: 2)
@@ -1087,13 +1107,14 @@ struct EmptyButton: View {
 // ARP button with mode icons
 struct ArpButton: View {
     let arpMode: ArpMode
+    let buttonSize: CGFloat
     let onPress: () -> Void
 
     var body: some View {
         ZStack {
             Rectangle()
                 .fill(arpMode != .off ? Color.green : Color.white)
-                .frame(width: 80, height: 80)
+                .frame(width: buttonSize, height: buttonSize)
                 .overlay(
                     Rectangle()
                         .stroke(arpMode != .off ? Color.white : Color.gray, lineWidth: 2)
@@ -1203,13 +1224,14 @@ struct DiceIcon: Shape {
 struct ScaleButton: View {
     let scale: ScaleType
     let isActive: Bool
+    let buttonSize: CGFloat
     let onPress: () -> Void
 
     var body: some View {
         ZStack {
             Rectangle()
                 .fill(Color.black)
-                .frame(width: 80, height: 80)
+                .frame(width: buttonSize, height: buttonSize)
                 .overlay(
                     Rectangle()
                         .stroke(isActive ? Color.white : Color.gray, lineWidth: isActive ? 4 : 2)
@@ -1232,13 +1254,14 @@ struct ScaleButton: View {
 struct BpmButton: View {
     let bpm: Int
     let isActive: Bool
+    let buttonSize: CGFloat
     let onPress: () -> Void
 
     var body: some View {
         ZStack {
             Rectangle()
                 .fill(Color.white)
-                .frame(width: 80, height: 80)
+                .frame(width: buttonSize, height: buttonSize)
                 .overlay(
                     Rectangle()
                         .stroke(isActive ? Color.black : Color.gray, lineWidth: isActive ? 4 : 2)
@@ -1289,13 +1312,14 @@ struct ArrowButton: View {
 // ROOT button for selecting root note
 struct RootButton: View {
     let currentNote: String
+    let buttonSize: CGFloat
     let onPress: () -> Void
 
     var body: some View {
         ZStack {
             Rectangle()
                 .fill(Color.white)
-                .frame(width: 80, height: 80)
+                .frame(width: buttonSize, height: buttonSize)
                 .overlay(
                     Rectangle()
                         .stroke(Color.gray, lineWidth: 2)
