@@ -1,0 +1,431 @@
+import SwiftUI
+
+enum AppMode {
+    case browse      // Normal waveform selection mode
+    case selecting   // Waiting for user to select a waveform for pitch mode
+    case play        // Pitch grid mode with selected waveform
+}
+
+struct ContentView: View {
+    @StateObject private var audioEngine = AudioEngine()
+    @State private var currentWaveform: WaveformType?
+    @State private var backgroundColor: Color = .black
+    @State private var appMode: AppMode = .browse
+    @State private var selectedWaveformForPitch: WaveformType?
+    @State private var activePitchNote: Int?  // Track which pitch pad is active
+
+    var body: some View {
+        GeometryReader { geometry in
+            let buttonSize: CGFloat = 80
+            let spacing: CGFloat = 4
+            let totalWidth = geometry.size.width - 40 // More padding
+            let columnsCount = Int(totalWidth / (buttonSize + spacing))
+            let columns = Array(repeating: GridItem(.fixed(buttonSize), spacing: spacing), count: max(4, columnsCount))
+
+            ZStack {
+                // Background color
+                backgroundColor
+                    .ignoresSafeArea()
+
+                // Centered crosshair for alignment verification
+                Path { path in
+                    // Vertical line
+                    path.move(to: CGPoint(x: geometry.size.width / 2, y: 0))
+                    path.addLine(to: CGPoint(x: geometry.size.width / 2, y: geometry.size.height))
+                    // Horizontal line
+                    path.move(to: CGPoint(x: 0, y: geometry.size.height / 2))
+                    path.addLine(to: CGPoint(x: geometry.size.width, y: geometry.size.height / 2))
+                }
+                .stroke(Color.white.opacity(0.2), lineWidth: 1)
+                .ignoresSafeArea()
+
+                VStack(spacing: 0) {
+                    Spacer()
+
+                    // Character at TOP - centered
+                    CharacterView(currentWaveform: currentWaveform, audioEngine: audioEngine)
+                        .frame(height: min(250, geometry.size.height * 0.3))
+                        .frame(maxWidth: .infinity)
+
+                    Spacer()
+
+                    // Button grid BELOW - centered
+                    ScrollView {
+                        VStack {
+                            Spacer()
+                            HStack {
+                                Spacer()
+                                if appMode == .browse || appMode == .selecting {
+                                // Browse/Selecting mode: Show all waveforms + keyboard button
+                                LazyVGrid(columns: columns, spacing: spacing) {
+                                    ForEach(WaveformType.allCases, id: \.self) { waveform in
+                                        WaveformButton(
+                                            waveform: waveform,
+                                            isActive: currentWaveform == waveform,
+                                            isPulsating: appMode == .selecting,
+                                            onPress: {
+                                                if appMode == .selecting {
+                                                    // Select this waveform for pitch mode
+                                                    selectedWaveformForPitch = waveform
+                                                    appMode = .play
+                                                    // Background stays black in play mode
+                                                } else {
+                                                    // Start playing when pressed
+                                                    audioEngine.play(waveform: waveform)
+                                                    currentWaveform = waveform
+                                                    backgroundColor = Color(
+                                                        red: waveform.color.0,
+                                                        green: waveform.color.1,
+                                                        blue: waveform.color.2
+                                                    )
+                                                }
+                                            },
+                                            onRelease: {
+                                                if appMode == .browse {
+                                                    // Stop when released
+                                                    audioEngine.stop()
+                                                    currentWaveform = nil
+                                                    backgroundColor = .black
+                                                }
+                                            }
+                                        )
+                                    }
+
+                                    // Keyboard button
+                                    KeyboardButton(
+                                        onPress: {
+                                            if appMode == .selecting {
+                                                // Cancel selection mode
+                                                appMode = .browse
+                                            } else {
+                                                // Enter selection mode
+                                                appMode = .selecting
+                                            }
+                                        }
+                                    )
+                                }
+                            } else {
+                                // Play mode: 4x4 grid of same waveform with different pitches
+                                let pitchColumns = Array(repeating: GridItem(.fixed(buttonSize), spacing: spacing), count: 4)
+                                LazyVGrid(columns: pitchColumns, spacing: spacing) {
+                                    ForEach(0..<16, id: \.self) { index in
+                                        if let waveform = selectedWaveformForPitch {
+                                            PitchButton(
+                                                waveform: waveform,
+                                                noteIndex: index,
+                                                isActive: activePitchNote == index,
+                                                onPress: {
+                                                    // Play this note
+                                                    audioEngine.playScale(note: index, waveform: waveform, isMajor: true)
+                                                    currentWaveform = waveform
+                                                    activePitchNote = index
+                                                },
+                                                onRelease: {
+                                                    // Stop when released
+                                                    audioEngine.stop()
+                                                    currentWaveform = nil
+                                                    activePitchNote = nil
+                                                }
+                                            )
+                                        }
+                                    }
+
+                                    // Back button to return to browse mode
+                                    BackButton(
+                                        onPress: {
+                                            audioEngine.stop()
+                                            appMode = .browse
+                                            selectedWaveformForPitch = nil
+                                            currentWaveform = nil
+                                            activePitchNote = nil
+                                            backgroundColor = .black
+                                        }
+                                    )
+                                }
+                                Spacer()
+                            }
+                            Spacer()
+                        }
+                        .padding(.horizontal, 20)
+                    }
+
+                    Spacer()
+                }
+            }
+        }
+    }
+}
+
+// EXACT copy of Rosita button style
+struct WaveformButton: View {
+    let waveform: WaveformType
+    let isActive: Bool
+    var isPulsating: Bool = false
+    let onPress: () -> Void
+    let onRelease: () -> Void
+
+    @State private var hasBeenPressed = false
+    @State private var pulsateScale: CGFloat = 1.0
+
+    @ViewBuilder
+    func getWaveformShape() -> some View {
+        let strokeColor: Color
+        if isActive {
+            strokeColor = .white
+        } else if isPulsating {
+            // In selecting mode, show waveform color
+            strokeColor = Color(red: waveform.color.0, green: waveform.color.1, blue: waveform.color.2)
+        } else {
+            strokeColor = .black
+        }
+
+        switch waveform {
+        case .sine:
+            SineWaveShape()
+                .stroke(strokeColor, lineWidth: 2)
+                .frame(width: 60, height: 40)
+        case .triangle:
+            TriangleWaveShape()
+                .stroke(strokeColor, lineWidth: 2)
+                .frame(width: 60, height: 40)
+        case .saw, .superSaw:
+            SawtoothWaveShape()
+                .stroke(strokeColor, lineWidth: 2)
+                .frame(width: 60, height: 40)
+        case .reverseSaw:
+            ReverseSawWaveShape()
+                .stroke(strokeColor, lineWidth: 2)
+                .frame(width: 60, height: 40)
+        case .square:
+            SquareWaveShape()
+                .stroke(strokeColor, lineWidth: 2)
+                .frame(width: 60, height: 40)
+        case .pulse, .pwm:
+            PulseWaveShape()
+                .stroke(strokeColor, lineWidth: 2)
+                .frame(width: 60, height: 40)
+        case .step, .quantizedStair:
+            StepWaveShape()
+                .stroke(strokeColor, lineWidth: 2)
+                .frame(width: 60, height: 40)
+        case .trapezoid:
+            TrapezoidWaveShape()
+                .stroke(strokeColor, lineWidth: 2)
+                .frame(width: 60, height: 40)
+        case .noise, .noiseBurst, .chaos:
+            NoiseWaveShape()
+                .stroke(strokeColor, lineWidth: 2)
+                .frame(width: 60, height: 40)
+        case .fmModulated:
+            SineWaveShape()
+                .stroke(strokeColor, lineWidth: 2)
+                .frame(width: 60, height: 40)
+        }
+    }
+
+    var body: some View {
+        ZStack {
+            // Background
+            Rectangle()
+                .fill(isActive ? Color(red: waveform.color.0, green: waveform.color.1, blue: waveform.color.2) : Color.white)
+                .frame(width: 80, height: 80)
+                .overlay(
+                    ZStack {
+                        // 3D bevel effect
+                        VStack(spacing: 0) {
+                            Rectangle()
+                                .fill(Color.white.opacity(isActive ? 0.4 : 0.0))
+                                .frame(height: 2)
+                            Spacer()
+                        }
+
+                        HStack(spacing: 0) {
+                            Rectangle()
+                                .fill(Color.white.opacity(isActive ? 0.4 : 0.0))
+                                .frame(width: 2)
+                            Spacer()
+                        }
+
+                        VStack(spacing: 0) {
+                            Spacer()
+                            Rectangle()
+                                .fill(Color.black.opacity(isActive ? 0.6 : 0.0))
+                                .frame(height: 2)
+                        }
+
+                        HStack(spacing: 0) {
+                            Spacer()
+                            Rectangle()
+                                .fill(Color.black.opacity(isActive ? 0.6 : 0.0))
+                                .frame(width: 2)
+                        }
+
+                        Rectangle()
+                            .stroke(isActive ? Color.white : Color.gray, lineWidth: 2)
+                    }
+                )
+
+            // Waveform shape in center
+            getWaveformShape()
+        }
+        .scaleEffect(isPulsating ? pulsateScale : 1.0)
+        .contentShape(Rectangle())
+        .gesture(
+            DragGesture(minimumDistance: 0)
+                .onChanged { _ in
+                    if !hasBeenPressed {
+                        hasBeenPressed = true
+                        onPress()
+                    }
+                }
+                .onEnded { _ in
+                    hasBeenPressed = false
+                    if !isPulsating {
+                        onRelease()
+                    }
+                }
+        )
+        .onAppear {
+            if isPulsating {
+                withAnimation(Animation.easeInOut(duration: 0.8).repeatForever(autoreverses: true)) {
+                    pulsateScale = 1.05
+                }
+            }
+        }
+        .onChange(of: isPulsating) { newValue in
+            if newValue {
+                withAnimation(Animation.easeInOut(duration: 0.8).repeatForever(autoreverses: true)) {
+                    pulsateScale = 1.05
+                }
+            } else {
+                withAnimation {
+                    pulsateScale = 1.0
+                }
+            }
+        }
+    }
+}
+
+// Keyboard button for entering pitch mode
+struct KeyboardButton: View {
+    let onPress: () -> Void
+
+    var body: some View {
+        ZStack {
+            Rectangle()
+                .fill(Color.white)
+                .frame(width: 80, height: 80)
+                .overlay(
+                    Rectangle()
+                        .stroke(Color.gray, lineWidth: 2)
+                )
+
+            // Keyboard icon using SF Symbol
+            Image(systemName: "music.note.list")
+                .font(.system(size: 30))
+                .foregroundColor(.black)
+        }
+        .contentShape(Rectangle())
+        .onTapGesture {
+            onPress()
+        }
+    }
+}
+
+// Pitch button for playing notes in a scale
+struct PitchButton: View {
+    let waveform: WaveformType
+    let noteIndex: Int
+    let isActive: Bool
+    let onPress: () -> Void
+    let onRelease: () -> Void
+
+    @State private var hasBeenPressed = false
+
+    var body: some View {
+        ZStack {
+            Rectangle()
+                .fill(isActive ? Color.white : Color(red: waveform.color.0, green: waveform.color.1, blue: waveform.color.2))
+                .frame(width: 80, height: 80)
+                .overlay(
+                    ZStack {
+                        // 3D bevel effect
+                        VStack(spacing: 0) {
+                            Rectangle()
+                                .fill(Color.white.opacity(isActive ? 0.0 : 0.4))
+                                .frame(height: 2)
+                            Spacer()
+                        }
+
+                        HStack(spacing: 0) {
+                            Rectangle()
+                                .fill(Color.white.opacity(isActive ? 0.0 : 0.4))
+                                .frame(width: 2)
+                            Spacer()
+                        }
+
+                        VStack(spacing: 0) {
+                            Spacer()
+                            Rectangle()
+                                .fill(Color.black.opacity(isActive ? 0.0 : 0.6))
+                                .frame(height: 2)
+                        }
+
+                        HStack(spacing: 0) {
+                            Spacer()
+                            Rectangle()
+                                .fill(Color.black.opacity(isActive ? 0.0 : 0.6))
+                                .frame(width: 2)
+                        }
+
+                        Rectangle()
+                            .stroke(isActive ? Color.black : Color.white, lineWidth: 2)
+                    }
+                )
+        }
+        .contentShape(Rectangle())
+        .gesture(
+            DragGesture(minimumDistance: 0)
+                .onChanged { _ in
+                    if !hasBeenPressed {
+                        hasBeenPressed = true
+                        onPress()
+                    }
+                }
+                .onEnded { _ in
+                    hasBeenPressed = false
+                    onRelease()
+                }
+        )
+    }
+}
+
+// Back button for returning to browse mode
+struct BackButton: View {
+    let onPress: () -> Void
+
+    var body: some View {
+        ZStack {
+            Rectangle()
+                .fill(Color.white)
+                .frame(width: 80, height: 80)
+                .overlay(
+                    Rectangle()
+                        .stroke(Color.gray, lineWidth: 2)
+                )
+
+            // Back arrow icon
+            Image(systemName: "arrow.left")
+                .font(.system(size: 30))
+                .foregroundColor(.black)
+        }
+        .contentShape(Rectangle())
+        .onTapGesture {
+            onPress()
+        }
+    }
+}
+
+#Preview {
+    ContentView()
+}
